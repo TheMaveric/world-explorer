@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Procedural World Explorer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            cursor: crosshair;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #1a202c;
+        }
+
+        #viewport {
+            position: relative;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+
+        #player {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            transition: transform 0.1s linear;
+        }
+
+        .pixelated {
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        .bubble-effect {
+            animation: bubble 0.5s ease-out;
+        }
+
+        @keyframes bubble {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.2);
+                opacity: 0.8;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        #mobileControls {
+            pointer-events: none;
+            /* Let clicks pass through the container */
+        }
+
+        #joystick {
+            pointer-events: auto;
+            /* But not the controls themselves */
+        }
+
+        #timeSliderContainer {
+            cursor: pointer;
+        }
+
+        #timeSliderContainer svg * {
+            pointer-events: none;
+            /* Allow events to be captured by the container */
+        }
+
+        /* For Webkit-based browsers (Chrome, Safari) */
+        .controls::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .controls::-webkit-scrollbar-track {
+            background: #2d3748;
+            /* bg-gray-700 */
+        }
+
+        .controls::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            /* bg-gray-600 */
+            border-radius: 4px;
+        }
+
+        /* Collapsible Panels */
+        .collapsible-hud.collapsed {
+            width: 48px;
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+        }
+
+        .collapsible-hud.collapsed .controls,
+        .collapsible-hud.collapsed .controls-footer {
+            display: none;
+        }
+
+        .collapsible-hud.collapsed .title-bar {
+            flex-direction: column-reverse;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0;
+        }
+
+        .collapsible-hud.collapsed h3 {
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            margin: 0;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .collapsible-hud.collapsed .toggle-icon {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+<div id="viewport">
+    <canvas id="canvas" class="pixelated"></canvas>
+    <div id="player">
+        <span id="player-emoji" class="text-lg">🚶</span>
+    </div>
+    <div id="loading"
+         class="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-75 z-50 transition-opacity duration-300 hidden">
+        <svg class="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none"
+             viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+            </path>
+        </svg>
+    </div>
+    <div class="absolute top-4 left-4 p-3 bg-gray-800 bg-opacity-75 rounded-lg shadow-md z-20 max-w-xs">
+        <div class="flex flex-col gap-2 text-sm font-semibold">
+            <div class="flex justify-between items-center text-sm font-semibold">
+                <span>⚡ Speed:</span>
+                <span id="speedModifierText">1x</span>
+            </div>
+            <div class="flex flex-col mt-2">
+                <div class="flex justify-between items-center">
+                    <span>🗺️ Pos:</span>
+                    <span id="posText">0, 0</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>🌲 Biome:</span>
+                    <span id="biomeText">...</span>
+                </div>
+                <div class="flex justify-between items-center mt-1">
+                    <span>☀️ Time:</span>
+                    <span id="timeText">...</span>
+                </div>
+                <div
+                        class="flex justify-between items-center text-xs text-gray-400 pt-1 border-t border-gray-700 mt-1">
+                    <span>Visible Trees:</span>
+                    <span id="treeCountText">0</span>
+                </div>
+                <div class="flex justify-between items-center text-xs text-gray-400">
+                    <span>Visible Fish:</span>
+                    <span id="fishCountText">0</span>
+                </div>
+                <div class="flex justify-between items-center mt-1">
+                    <span>⌨️ Keys:</span>
+                    <span id="keysText">...</span>
+                </div>
+                <div class="flex justify-between items-center mt-1">
+                    <span>🎒 Bag:</span>
+                    <span id="invText" class="font-mono text-gray-300">—</span>
+                </div>
+
+                <div
+                        class="flex justify-between items-center text-xs text-gray-400 pt-1 border-t border-gray-700 mt-1">
+                    <span>FPS:</span>
+                    <span id="currentFps" class="font-mono">--</span>
+                </div>
+                <div class="flex justify-between items-center text-xs text-gray-400">
+                    <span>Min/Max:</span>
+                    <span class="font-mono"><span id="minFps">--</span>/<span id="maxFps">--</span></span>
+                </div>
+                <div
+                        class="flex justify-between items-center text-xs text-gray-400 pt-1 border-t border-gray-700 mt-1">
+                    <span>'H' - Contours:</span>
+                    <span id="contourStatus" class="font-semibold text-red-400">Off</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="messageBox" class="absolute top-24 right-4 flex justify-center z-40">
+        <div id="messageText" class="p-3 bg-gray-700 text-white rounded-lg shadow-md hidden text-center w-auto">
+        </div>
+    </div>
+    <div class="absolute bottom-4 left-4 z-40">
+        <div class="w-48 h-48 bg-gray-800 border-2 border-gray-600 rounded-lg overflow-hidden relative">
+            <canvas id="minimapCanvas" class="w-full h-full pixelated"></canvas>
+            <div id="minimapPlayer" class="absolute w-2 h-2 bg-red-500 rounded-full"
+                 style="left: 50%; top: 50%; transform: translate(-50%, -50%);"></div>
+        </div>
+    </div>
+    <div id="timeSliderContainer" class="absolute bottom-4 right-4 z-40 w-32 h-32">
+        <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="40" class="stroke-gray-700" stroke-width="8" fill="rgba(31, 41, 55, 0.7)">
+            </circle>
+            <path id="timeSliderProgress" class="stroke-yellow-400" stroke-width="8" fill="none"
+                  stroke-linecap="round"></path>
+            <text x="50" y="15" text-anchor="middle" font-size="14">🕛</text>
+            <text x="88" y="55"
+                  text-anchor="middle" font-size="14">☀️
+            </text>
+            <text x="50" y="95" text-anchor="middle"
+                  font-size="14">🕕
+            </text>
+            <text x="12" y="55" text-anchor="middle" font-size="14">🌙</text>
+            <circle id="timeSliderHandle" cx="50" cy="10" r="6" class="fill-white"></circle>
+        </svg>
+    </div>
+    <div id="settingsHud"
+         class="absolute top-1/2 right-4 -translate-y-1/2 bg-gray-800 bg-opacity-90 p-4 rounded-lg shadow-lg z-40 w-64 max-h-[80vh] overflow-y-auto transition-all duration-300 collapsed collapsible-hud">
+        <div class="flex items-center justify-between">
+            <label for="lightingToggle" class="text-sm font-semibold text-gray-300">Lighting</label>
+            <input id="lightingToggle" type="checkbox" class="w-5 h-5 accent-blue-500" checked/>
+        </div>
+
+        <div class="flex justify-between items-center mb-4 title-bar">
+            <h3 class="text-lg font-bold text-white transition-all duration-300">World
+                Settings</h3>
+            <button id="toggleSettings" class="text-white p-1 rounded-full hover:bg-gray-700">
+                <svg class="w-6 h-6 transition-transform duration-300 toggle-icon" fill="none" stroke="currentColor"
+                     viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7">
+                    </path>
+                </svg>
+            </button>
+        </div>
+        <div class="controls w-full grid grid-cols-1 gap-4 pr-2">
+            <div class="flex flex-col items-center">
+                <label for="seedInput" class="text-sm font-semibold mb-2 text-gray-300">Seed</label>
+                <input type="text" id="seedInput" placeholder="Enter a number"
+                       class="w-full text-center bg-gray-700 rounded-lg py-2 px-3 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="heightScaleSlider" class="text-sm font-semibold mb-2 text-gray-300">Height
+                    Scale: <span id="heightScaleValue">50</span></label>
+                <input type="range" id="heightScaleSlider" min="20" max="150" value="50"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="moistureScaleSlider" class="text-sm font-semibold mb-2 text-gray-300">Moisture
+                    Scale: <span id="moistureScaleValue">80</span></label>
+                <input type="range" id="moistureScaleSlider" min="20" max="150" value="80"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="controlRow">
+                <label>Sun Direction: <span id="sunDirValue">0°</span></label>
+                <input id="sunDirSlider" type="range" min="-180" max="180" step="1" value="0"/>
+                <div class="small">Azimuth; 0° = east, 90° = south</div>
+            </div>
+
+
+            <div class="flex flex-col items-center">
+                <label for="climateContrastSlider" class="text-sm font-semibold mb-2 text-gray-300">Climate
+                    Contrast: <span id="climateContrastValue">1.5</span></label>
+                <input type="range" id="climateContrastSlider" min="1.0" max="3.0" step="0.1" value="1.5"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="pixelScaleSlider" class="text-sm font-semibold mb-2 text-gray-300">Pixel
+                    Scale: <span id="pixelScaleValue">24</span></label>
+                <input type="range" id="pixelScaleSlider" min="1" max="24" value="24"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="persistenceSlider" class="text-sm font-semibold mb-2 text-gray-300">Persistence:
+                    <span id="persistenceValue">0.5</span></label>
+                <input type="range" id="persistenceSlider" min="0.1" max="1" step="0.05" value="0.5"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="playerSpeedSlider" class="text-sm font-semibold mb-2 text-gray-300">Player
+                    Speed: <span id="playerSpeedValue">2</span></label>
+                <input type="range" id="playerSpeedSlider" min="0.5" max="5" step="0.5" value="2"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="waterLevelSlider" class="text-sm font-semibold mb-2 text-gray-300">Water
+                    Level: <span id="waterLevelValue">0.450</span></label>
+                <input type="range" id="waterLevelSlider" min="0.000" max="1.000" step="0.001" value="0.450"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="treeDensitySlider" class="text-sm font-semibold mb-2 text-gray-300">Tree
+                    Density: <span id="treeDensityValue">2.0</span>x</label>
+                <input type="range" id="treeDensitySlider" min="0.2" max="2.0" step="0.1" value="2.0"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="fishDensitySlider" class="text-sm font-semibold mb-2 text-gray-300">Fish
+                    Density: <span id="fishDensityValue">2.2</span>x
+                </label>
+
+                <input type="range" id="fishDensitySlider" min="0.0" max="3.0" step="0.1" value="2.2"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+
+            </div>
+            <div class="flex flex-col items-center">
+                <label for="mapScaleSlider" class="text-sm font-semibold mb-2 text-gray-300">Map
+                    Scale: <span id="mapScaleValue">0.10</span></label>
+                <input type="range" id="mapScaleSlider" min="0.1" max="2.0" step="0.05" value="0.1"
+                       class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
+            </div>
+        </div>
+        <p class="text-xs text-center text-gray-400 mt-4 controls-footer">Changes
+            are applied live.</p>
+    </div>
+    <div id="legendHud"
+         class="absolute bottom-56 left-4 bg-gray-800 bg-opacity-90 p-4 rounded-lg shadow-lg z-30 w-64 max-h-[40vh] overflow-y-auto transition-all duration-300 collapsed collapsible-hud">
+        <div class="flex justify-between items-center mb-4 title-bar">
+            <h3 class="text-lg font-bold text-white transition-all duration-300">Biome
+                Legend</h3>
+            <button id="toggleLegend" class="text-white p-1 rounded-full hover:bg-gray-700">
+                <svg class="w-6 h-6 transition-transform duration-300 toggle-icon" fill="none" stroke="currentColor"
+                     viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7">
+                    </path>
+                </svg>
+            </button>
+        </div>
+        <div id="legendEntries" class="controls w-full flex flex-col gap-2 pr-2 text-sm">
+            <!-- Entries will be generated by JS -->
+        </div>
+    </div>
+    <div id="mobileControls" class="fixed bottom-0 left-0 right-0 p-8 flex justify-between items-end z-40 hidden">
+        <div id="joystick" class="w-32 h-32 bg-gray-500 bg-opacity-30 rounded-full relative">
+            <div id="joystickHandle"
+                 class="w-16 h-16 bg-gray-400 bg-opacity-50 rounded-full absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+            </div>
+        </div>
+    </div>
+</div>
+<script type="module" src="src/js/scripts.js"></script>
+</body>
+</html>
