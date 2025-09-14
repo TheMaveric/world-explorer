@@ -928,8 +928,8 @@ function drawIsoWorld(deltaTime = 0) {
 
     // --- outline styles for isometric view ---
     const OUTLINE_WIDTH = Math.max(1, pixelScale * 0.12);
-    const OUTLINE_TOP   = 'rgba(0,0,0,0.18)';
-    const OUTLINE_SIDE  = 'rgba(0,0,0,0.25)';
+    const OUTLINE_TOP = 'rgba(0,0,0,0.18)';
+    const OUTLINE_SIDE = 'rgba(0,0,0,0.25)';
     ctx.lineJoin = 'miter';
     ctx.miterLimit = 2;
     const tilesAcross = Math.ceil(vw / tw) + 4;
@@ -1028,7 +1028,8 @@ function drawIsoWorld(deltaTime = 0) {
                 riverHtop = Math.max(SEA_LEVEL_ABS, Hraw);
             }
         }
-        const currentHtop = Hraw;const p_C = proj(wx, wy, (currentHtop - SEA_LEVEL_ABS) * elevScale);
+        const currentHtop = Hraw;
+        const p_C = proj(wx, wy, (currentHtop - SEA_LEVEL_ABS) * elevScale);
 
         if (p_C.x < -tw || p_C.x > vw + tw || p_C.y < -th - 200 || p_C.y > vh + 200) continue;
 
@@ -1177,8 +1178,9 @@ function drawIsoWorld(deltaTime = 0) {
 
     // Pass 2: Draw all sorted objects
     for (const obj of allVisibleObjects) {
-        let objWz = (getAbsoluteHeight(obj.x, obj.y, perlin, slidersVals) - SEA_LEVEL_ABS);
-
+        // Match terrain’s conversion: height units → pixels
+        const objHeightUnits = getAbsoluteHeight(obj.x, obj.y, perlin, slidersVals) - SEA_LEVEL_ABS;
+        let objWz = objHeightUnits * elevScale;
         // A simple example for a cube-like house
         if (obj.emoji === '🏠') {
             const size = 1.0;
