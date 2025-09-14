@@ -1198,17 +1198,26 @@ function drawIsoWorld(deltaTime = 0) {
 
         if (obj.type === 'tree') {
             visibleTrees++;
+            // Use the same anchor as height debug: tile center at (wx, wy),
+            // plus the per-object jitter so iso trees match top-down/debug markers.
+            const pxw = obj.x + (obj.offsetX || 0);
+            const pyw = obj.y + (obj.offsetY || 0);
+            const pTree = proj(pxw, pyw, objWz);
+
+            // soft shadow
             ctx.save();
             ctx.globalAlpha = 0.35;
             ctx.fillStyle = '#000';
             ctx.beginPath();
-            ctx.ellipse(p.x, p.y + pixelScale * 0.25, pixelScale * 0.45, pixelScale * 0.22, 0, 0, Math.PI * 2);
+            ctx.ellipse(pTree.x, pTree.y + pixelScale * 0.25, pixelScale * 0.45, pixelScale * 0.22, 0, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
+
+            // tree glyph
             ctx.font = `${Math.max(10, pixelScale * (obj.height ? 0.8 + obj.height * 0.12 : 1.1))}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(obj.emoji, p.x, p.y);
+            ctx.fillText(obj.emoji, pTree.x, pTree.y);
         } else if (obj.type === 'fish' || obj.type === 'float') {
             visibleFish++;
             ctx.save();
@@ -1939,7 +1948,13 @@ function drawDebugSpawnsView() {
 
                 if (isIsometric) {
                     const Htop = getAbsoluteHeight(obj.x, obj.y, perlin, sliders, null);
-                    const p = proj(obj.x, obj.y, (Htop - SEA_LEVEL_ABS) * iso.elev());
+                    const p = worldToScreenIso(
+                        obj.x - player.x,
+                        obj.y - player.y,
+                        (Htop - SEA_LEVEL_ABS) * iso.elev(),
+                        centerX,
+                        centerY
+                    );
                     sx = p.x;
                     sy = p.y;
                 } else {
