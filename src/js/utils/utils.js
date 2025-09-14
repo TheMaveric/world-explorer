@@ -439,3 +439,10 @@ export function getFloatingPlacementRadius(biome, sliders) {
     if (biome.includes('Water') || /river/i.test(biome)) return Math.max(3, 14 / Math.max(0.2, sliders.fishDensityMultiplier));
     return 0;
 }
+
+export function pointInDiamond(mx, my, cx, cy, tw, th) {
+    // diamond centered at (cx, cy) with width tw and height th
+    const dx = Math.abs(mx - cx);
+    const dy = Math.abs(my - cy);
+    return (dx / (tw * 0.5) + dy / (th * 0.5)) <= 1;
+}

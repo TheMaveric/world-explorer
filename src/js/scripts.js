@@ -25,7 +25,7 @@ import {
     getBiomeAtWorldCoords,
     getBiomeIndexFromCache,
     getChunk,
-    getFishPlacementRadius,
+    getFishPlacementRadius, getFloatingPlacementRadius,
     getHeightGrad,
     getHeightValueAtWorldCoords,
     getMovementSpeedModifier,
@@ -36,7 +36,7 @@ import {
     getTreePlacementRadius,
     isWaterLikeAt,
     isWaterLikeBiomeName,
-    manageCache,
+    manageCache, pointInDiamond,
     seededRandom,
     updateNpc,
     updateWind
@@ -48,18 +48,17 @@ import {PoissonDisk} from "./algos/poissonDisk.js";
 let selectedTile = null; // { x, y } in world tile coords
 let lastVisibleTiles = []; // visible tile screen diamonds for picking this frame
 
-function pointInDiamond(mx, my, cx, cy, tw, th) {
-    // diamond centered at (cx, cy) with width tw and height th
-    const dx = Math.abs(mx - cx);
-    const dy = Math.abs(my - cy);
-    return (dx / (tw * 0.5) + dy / (th * 0.5)) <= 1;
-}
-
 let perlin, isGenerating = false, isGamePaused = false, isDebugViewActive = false, isContourOverlayActive = false;
 let showSpawnOverlay = false; // NEW: toggled with P
 let isLightingEnabled = true;
 // Rendering mode: 'topdown' or 'isometric'
 let renderMode = 'topdown';
+// Feature toggles (HUD buttons)
+let enableTrees = true;
+let enableFish = true;
+let enableNpcs = true;
+let enableFireflies = true;
+
 // --- Weather & Season (globals) ---
 let season = 0.25; // 0..1 (winter→spring→summer→autumn bias)
 // --- Wind (global, slow-changing direction + gusts + spatial coherence) ---
@@ -74,12 +73,6 @@ let hoverTile = null; // tile currently under mouse (front-most)
 let fireflies = []; // ephemeral night particles
 let waterFxQuality = 1; // you already have this below, keep the highest one (remove duplicate if present)
 let frameTick = 0; // "
-
-// Floating objects' radius (reuse fish water coverage but sparser)
-function getFloatingPlacementRadius(biome, sliders) {
-    if (biome.includes('Water') || /river/i.test(biome)) return Math.max(3, 14 / Math.max(0.2, sliders.fishDensityMultiplier));
-    return 0;
-}
 
 let keys = {}, timeOfDay = 0.25, lastFrameTime = 0, lastFpsUpdateTime = 0;
 const fpsHistory = [], messages = [], particles = [];
@@ -138,10 +131,10 @@ function generatePerlinMaps() {
     const seed = parseInt(seedInput.value) || 0;
     perlin = {
         height: new PerlinNoise(seed),
-        moisture: new PerlinNoise(seed + 1),
-        object: new PerlinNoise(seed + 2),
-        temperature: new PerlinNoise(seed + 3),
-        river: new PerlinNoise(seed + 4)
+        moisture: new PerlinNoise(seed + 19987),
+        object: new PerlinNoise(seed + 23456),
+        temperature: new PerlinNoise(seed + 37567),
+        river: new PerlinNoise(seed + 47658)
     };
 }
 
@@ -756,7 +749,7 @@ function fillIsoDiamond(ctx, cx, cy, tw, th, fillStyle) {
 }
 
 // --- NEW: Helper to draw a generic isometric box (e.g., a cube) ---
-function drawIsoBox(ctx, wx, wy, wz, size, color, proj, lightK) {
+function drawIsoBox(ctx, wx, wy, wz, size, color, proj, lightK, opts = {}) {
     const elevScale = iso.elev();
     const tw = iso.tileW();
 
@@ -775,36 +768,46 @@ function drawIsoBox(ctx, wx, wy, wz, size, color, proj, lightK) {
     const pT_BR = proj(wx + size, wy + size, topWz);
 
     const [r, g, b] = color;
+    const {showLeft = true, showRight = true, showTop = true} = opts;
+    if (showLeft) {
 
-    // Draw left face (darkest)
-    ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.7)}, ${Math.round(g * lightK * 0.7)}, ${Math.round(b * lightK * 0.7)})`;
-    ctx.beginPath();
-    ctx.moveTo(pT_TL.x, pT_TL.y);
-    ctx.lineTo(pB_TL.x, pB_TL.y);
-    ctx.lineTo(pB_BL.x, pB_BL.y);
-    ctx.lineTo(pT_BL.x, pT_BL.y);
-    ctx.closePath();
-    ctx.fill();
 
-    // Draw right face (medium shade)
-    ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.85)}, ${Math.round(g * lightK * 0.85)}, ${Math.round(b * lightK * 0.85)})`;
-    ctx.beginPath();
-    ctx.moveTo(pT_TR.x, pT_TR.y);
-    ctx.lineTo(pB_TR.x, pB_TR.y);
-    ctx.lineTo(pB_BR.x, pB_BR.y);
-    ctx.lineTo(pT_BR.x, pT_BR.y);
-    ctx.closePath();
-    ctx.fill();
+        // Draw left face (darkest)
+        ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.7)}, ${Math.round(g * lightK * 0.7)}, ${Math.round(b * lightK * 0.7)})`;
+        ctx.beginPath();
+        ctx.moveTo(pT_TL.x, pT_TL.y);
+        ctx.lineTo(pB_TL.x, pB_TL.y);
+        ctx.lineTo(pB_BL.x, pB_BL.y);
+        ctx.lineTo(pT_BL.x, pT_BL.y);
+        ctx.closePath();
+        ctx.fill();
+    }
+    if (showRight) {
 
-    // Draw top face (lightest)
-    ctx.fillStyle = `rgb(${Math.round(r * lightK)}, ${Math.round(g * lightK)}, ${Math.round(b * lightK)})`;
-    ctx.beginPath();
-    ctx.moveTo(pT_TL.x, pT_TL.y);
-    ctx.lineTo(pT_TR.x, pT_TR.y);
-    ctx.lineTo(pT_BR.x, pT_BR.y);
-    ctx.lineTo(pT_BL.x, pT_BL.y);
-    ctx.closePath();
-    ctx.fill();
+
+        // Draw right face (medium shade)
+        ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.85)}, ${Math.round(g * lightK * 0.85)}, ${Math.round(b * lightK * 0.85)})`;
+        ctx.beginPath();
+        ctx.moveTo(pT_TR.x, pT_TR.y);
+        ctx.lineTo(pB_TR.x, pB_TR.y);
+        ctx.lineTo(pB_BR.x, pB_BR.y);
+        ctx.lineTo(pT_BR.x, pT_BR.y);
+        ctx.closePath();
+        ctx.fill();
+    }
+    if (showTop) {
+
+
+        // Draw top face (lightest)
+        ctx.fillStyle = `rgb(${Math.round(r * lightK)}, ${Math.round(g * lightK)}, ${Math.round(b * lightK)})`;
+        ctx.beginPath();
+        ctx.moveTo(pT_TL.x, pT_TL.y);
+        ctx.lineTo(pT_TR.x, pT_TR.y);
+        ctx.lineTo(pT_BR.x, pT_BR.y);
+        ctx.lineTo(pT_BL.x, pT_BL.y);
+        ctx.closePath();
+        ctx.fill();
+    }
 }
 
 
@@ -932,12 +935,24 @@ function drawIsoWorld(deltaTime = 0) {
     const OUTLINE_SIDE = 'rgba(0,0,0,0.25)';
     ctx.lineJoin = 'miter';
     ctx.miterLimit = 2;
-    const tilesAcross = Math.ceil(vw / tw) + 4;
-    const tilesDown = Math.ceil(vh / th) + 6;
-    const startX = Math.floor(player.x - tilesAcross);
-    const endX = Math.ceil(player.x + tilesAcross);
-    const startY = Math.floor(player.y - tilesDown);
-    const endY = Math.ceil(player.y + tilesDown);
+    const ISO_NEAR_PAD = 2; // extra tiles near the camera
+    const ISO_FAR_PAD = 4; // extra tiles far from the camera
+// Compute screen-corner coverage in world space to fully cover the screen
+    const cornerPad = (ISO_FAR_PAD + ISO_NEAR_PAD) * Math.max(tw, th);
+    const _corners = [
+        screenToWorldIso(-cornerPad, -cornerPad, camX, camY),
+        screenToWorldIso(vw + cornerPad, -cornerPad, camX, camY),
+        screenToWorldIso(vw + cornerPad, vh + cornerPad, camX, camY),
+        screenToWorldIso(-cornerPad, vh + cornerPad, camX, camY),
+    ];
+// Convert corner deltas (relative to player) to absolute world coords
+    const _wxs = _corners.map(c => c.x + player.x);
+    const _wys = _corners.map(c => c.y + player.y);
+    const startX = Math.floor(Math.min(..._wxs)) - ISO_NEAR_PAD;
+    const endX = Math.ceil(Math.max(..._wxs)) + ISO_FAR_PAD;
+    const startY = Math.floor(Math.min(..._wys)) - ISO_NEAR_PAD;
+    const endY = Math.ceil(Math.max(..._wys)) + ISO_FAR_PAD;
+
 
     for (let wy = startY; wy <= endY; wy += CHUNK_SIZE) {
         for (let wx = startX; wx <= endX; wx += CHUNK_SIZE) {
@@ -1178,7 +1193,12 @@ function drawIsoWorld(deltaTime = 0) {
 
     // Pass 2: Draw all sorted objects
     for (const obj of allVisibleObjects) {
-        // Match terrain’s conversion: height units → pixels
+
+        // HUD feature toggles
+        if ((obj.type === 'tree' && !enableTrees) || (obj.type === 'fish' && !enableFish) || (obj.type === 'npc' && !enableNpcs)) {
+            continue;
+        }
+// Match terrain’s conversion: height units → pixels
         const objHeightUnits = getAbsoluteHeight(obj.x, obj.y, perlin, slidersVals) - SEA_LEVEL_ABS;
         let objWz = objHeightUnits * elevScale;
         // A simple example for a cube-like house
@@ -1196,6 +1216,12 @@ function drawIsoWorld(deltaTime = 0) {
 
         const p = proj(obj.x, obj.y, objWz);
 
+        // Screen-space culling to skip objects outside the camera view
+        const _objMarginX = tw; // one tile width
+        const _objMarginY = th + pixelScale * (obj.height ? (1 + obj.height * 0.6) : 1);
+        if (p.x < -_objMarginX || p.x > vw + _objMarginX || p.y < -_objMarginY || p.y > vh + _objMarginY) {
+            continue;
+        }
         if (obj.type === 'tree') {
             visibleTrees++;
             // Use the same anchor as height debug: tile center at (wx, wy),
@@ -1537,6 +1563,11 @@ function drawWorld(deltaTime = 0) {
 
     // Pass 2: Draw all sorted objects
     for (const obj of allVisibleObjects) {
+
+        // HUD feature toggles
+        if ((obj.type === 'tree' && !enableTrees) || (obj.type === 'fish' && !enableFish) || (obj.type === 'npc' && !enableNpcs)) {
+            continue;
+        }
         const objScreenX = (obj.x - startTileX) * pixelScale;
         const objScreenY = (obj.y - startTileY) * pixelScale;
         if (objScreenX < -pixelScale || objScreenX > vw || objScreenY < -pixelScale || objScreenY > vh) continue;
@@ -1778,7 +1809,7 @@ function drawWorld(deltaTime = 0) {
 
     // Pass 5: Fireflies & Trade prompt
     // --- Fireflies: update + render (glowing, pulsing, night-only) ---
-    if (timeInfo.lightLevel < FIREFLY_NIGHT_LIGHT_LEVEL) {
+    if (enableFireflies && timeInfo.lightLevel < FIREFLY_NIGHT_LIGHT_LEVEL) {
         for (const {chunk} of drawList) {
             const anchors = chunk.objects ? chunk.objects.filter(o => o.type === 'tree') : [];
             if (anchors.length === 0) continue;
@@ -1790,7 +1821,7 @@ function drawWorld(deltaTime = 0) {
             while (chunk.fireflies.length < target) {
                 const t = anchors[(Math.random() * anchors.length) | 0];
                 const jitter = () => (Math.random() - 0.5) * 2.0;
-                chunk.fireflies.push({
+                if (enableFireflies) chunk.fireflies.push({
                     x: t.x + jitter(),
                     y: t.y + jitter(),
                     homeX: t.x + jitter(),
@@ -2422,6 +2453,17 @@ window.onload = () => {
         joystick: document.getElementById('joystick'),
         joystickHandle: document.getElementById('joystickHandle'),
         lightingToggle: document.getElementById('lightingToggle'),
+
+        // Emoji buttons
+        btnLighting: document.getElementById('btnLighting'),
+        btnContours: document.getElementById('btnContours'),
+        btnView: document.getElementById('btnView'),
+        btnWaterFx: document.getElementById('btnWaterFx'),
+        btnHeights: document.getElementById('btnHeights'),
+        btnTrees: document.getElementById('btnTrees'),
+        btnFish: document.getElementById('btnFish'),
+        btnNpcs: document.getElementById('btnNpcs'),
+        btnFireflies: document.getElementById('btnFireflies'),
         inventoryText: document.getElementById('invText'),
     };
 
@@ -2480,6 +2522,55 @@ window.onload = () => {
         showMessage(`Lighting: ${isLightingEnabled ? 'On' : 'Off'}`);
         // Rebuild chunks so per-pixel shading matches the new mode
         handleGenerate(false);
+    });
+    // Emoji quick-toggle wiring
+    DOMElements.btnLighting?.addEventListener('click', () => {
+        isLightingEnabled = !isLightingEnabled;
+        if (DOMElements.lightingToggle) DOMElements.lightingToggle.checked = isLightingEnabled;
+        showMessage(`Lighting: ${isLightingEnabled ? 'On' : 'Off'}`);
+        handleGenerate(false);
+    });
+    DOMElements.btnContours?.addEventListener('click', () => {
+        isContourOverlayActive = !isContourOverlayActive;
+        DOMElements.contourStatus.textContent = isContourOverlayActive ? 'On' : 'Off';
+        DOMElements.contourStatus.classList.toggle('text-red-400', !isContourOverlayActive);
+        DOMElements.contourStatus.classList.toggle('text-green-400', isContourOverlayActive);
+        drawWorld();
+    });
+    DOMElements.btnView?.addEventListener('click', () => {
+        renderMode = (renderMode === 'topdown') ? 'isometric' : 'topdown';
+        showMessage(`View: ${renderMode === 'isometric' ? '2.5D' : 'Top-down'}`);
+        drawWorld();
+    });
+    DOMElements.btnWaterFx?.addEventListener('click', () => {
+        waterFxQuality = (waterFxQuality + 1) % 3;
+        showMessage(`Water FX: ${['Off', 'Low', 'Med'][waterFxQuality]}`);
+        drawWorld();
+    });
+    DOMElements.btnHeights?.addEventListener('click', () => {
+        showTileHeights = !showTileHeights;
+        showMessage(`Tile heights: ${showTileHeights ? 'On' : 'Off'}`);
+        drawWorld();
+    });
+    DOMElements.btnTrees?.addEventListener('click', () => {
+        enableTrees = !enableTrees;
+        showMessage(`Trees: ${enableTrees ? 'On' : 'Off'}`);
+        drawWorld();
+    });
+    DOMElements.btnFish?.addEventListener('click', () => {
+        enableFish = !enableFish;
+        showMessage(`Fish: ${enableFish ? 'On' : 'Off'}`);
+        drawWorld();
+    });
+    DOMElements.btnNpcs?.addEventListener('click', () => {
+        enableNpcs = !enableNpcs;
+        showMessage(`NPCs: ${enableNpcs ? 'On' : 'Off'}`);
+        drawWorld();
+    });
+    DOMElements.btnFireflies?.addEventListener('click', () => {
+        enableFireflies = !enableFireflies;
+        showMessage(`Fireflies: ${enableFireflies ? 'On' : 'Off'}`);
+        drawWorld();
     });
 
 
