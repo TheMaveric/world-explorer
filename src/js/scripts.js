@@ -816,7 +816,7 @@ function drawCenteredLabel(ctx, x, y, text, px) {
     ctx.save();
     ctx.font = `${fontPx}px monospace`;
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
+    ctx.textBaseline = 'middle';
     ctx.lineWidth = Math.max(1, Math.floor(fontPx * 0.22));
     ctx.strokeStyle = 'rgba(0,0,0,0.65)';
     ctx.fillStyle = '#ffffff';
@@ -1149,7 +1149,7 @@ function drawIsoWorld(deltaTime = 0) {
         if (showTileHeights) {
             const label = String(Math.round(currentHtop));
             const labelX = (p_C.x | 0);
-            const labelY = ((p_C.y - th / 2) | 0) - 2;
+            const labelY = (p_C.y | 0);
             const labelPx = Math.max(8, Math.min(12, (th * 0.65) | 0));
             drawCenteredLabel(ctx, labelX, labelY, label, labelPx);
         }
@@ -1205,7 +1205,7 @@ function drawIsoWorld(deltaTime = 0) {
             ctx.restore();
             ctx.font = `${Math.max(10, pixelScale * (obj.height ? 0.8 + obj.height * 0.12 : 1.1))}px sans-serif`;
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
+            ctx.textBaseline = 'middle';
             ctx.fillText(obj.emoji, p.x, p.y);
         } else if (obj.type === 'fish' || obj.type === 'float') {
             visibleFish++;
@@ -1326,7 +1326,7 @@ function drawIsoWorld(deltaTime = 0) {
         ctx.save();
         ctx.font = `${Math.max(10, pixelScale * 0.7)}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
+        ctx.textBaseline = 'middle';
         const w = ctx.measureText(txt).width + 12;
         const x = nearbyTradeNpc.sx, y = nearbyTradeNpc.sy;
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
@@ -1539,7 +1539,7 @@ function drawWorld(deltaTime = 0) {
 
             ctx.font = `${obj._fontCache.px}px sans-serif`;
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
+            ctx.textBaseline = 'middle';
 
             const tileLeft = Math.floor(objScreenX);
             const tileTop = Math.floor(objScreenY);
@@ -1835,7 +1835,7 @@ function drawWorld(deltaTime = 0) {
         ctx.save();
         ctx.font = `${Math.max(10, pixelScale * 0.7)}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
+        ctx.textBaseline = 'middle';
         const w = ctx.measureText(txt).width + 12;
         const x = nearbyTradeNpc.sx, y = nearbyTradeNpc.sy;
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
