@@ -9,8 +9,6 @@ import {
     FIREFLY_MAX_PER_CHUNK,
     FIREFLY_NIGHT_LIGHT_LEVEL,
     FISH_TYPES,
-    MAX_CACHE_SIZE,
-    MAX_CHUNKS_PER_FRAME,
     NPC_STYLES,
     rawNoiseCache,
     ROLES,
@@ -38,17 +36,18 @@ import {
     getTreePlacementRadius,
     isWaterLikeAt,
     isWaterLikeBiomeName,
+    manageCache,
     seededRandom,
     updateNpc,
-    updateWind,
-    manageCache
+    updateWind
 } from "./utils/utils.js";
 import {PerlinNoise} from "./algos/perlin.js";
 import {Particle} from "./object/particle.js";
 import {PoissonDisk} from "./algos/poissonDisk.js";
 
-let selectedTile = null;            // { x, y } in world tile coords
-let lastVisibleTiles = [];          // visible tile screen diamonds for picking this frame
+let selectedTile = null; // { x, y } in world tile coords
+let lastVisibleTiles = []; // visible tile screen diamonds for picking this frame
+
 function pointInDiamond(mx, my, cx, cy, tw, th) {
     // diamond centered at (cx, cy) with width tw and height th
     const dx = Math.abs(mx - cx);
@@ -70,11 +69,11 @@ let windTime = 0;
 let nearbyTradeNpc = null;
 // ---- Tile picking state ----
 let mouse = {x: 0, y: 0};
-let hoverTile = null;    // tile currently under mouse (front-most)
+let hoverTile = null; // tile currently under mouse (front-most)
 // --- World life & hazards (new globals) ---
-let fireflies = [];                    // ephemeral night particles
-let waterFxQuality = 1;                // you already have this below, keep the highest one (remove duplicate if present)
-let frameTick = 0;                     // "
+let fireflies = []; // ephemeral night particles
+let waterFxQuality = 1; // you already have this below, keep the highest one (remove duplicate if present)
+let frameTick = 0; // "
 
 // Floating objects' radius (reuse fish water coverage but sparser)
 function getFloatingPlacementRadius(biome, sliders) {
@@ -148,16 +147,15 @@ function generatePerlinMaps() {
 
 // --- Helpers for biome-aware rivers ----------------------------------------
 function rgbMix([r1, g1, b1], [r2, g2, b2], a) {
-    return [Math.round(r1 * (1 - a) + r2 * a), Math.round(g1 * (1 - a) + g2 * a), // ← fix: use g2 here
-        Math.round(b1 * (1 - a) + b2 * a)];
+    return [Math.round(r1 * (1 - a) + r2 * a), Math.round(g1 * (1 - a) + b2 * a), Math.round(b1 * (1 - a) + b2 * a)];
 }
 
 
 // Sample 8-neighborhood to find dominant *land* biome around (local grid coords)
 function getDominantNeighborLandBiome(biomeGrid, x, y) {
     const w = CHUNK_SIZE, h = CHUNK_SIZE;
-    const counts = {};
     const isLand = b => b && !(b.includes('Water') || /river/i.test(b)) && b !== 'beach' && b !== 'snowyBeach';
+    const counts = {};
     for (let j = -1; j <= 1; j++) {
         for (let i = -1; i <= 1; i++) {
             if (i === 0 && j === 0) continue;
@@ -170,8 +168,8 @@ function getDominantNeighborLandBiome(biomeGrid, x, y) {
     // return most frequent land biome (or null)
     let best = null, c = -1;
     for (const k in counts) if (counts[k] > c) {
-        best = c;
         best = k;
+        c = counts[k];
     }
     return best;
 }
@@ -180,13 +178,13 @@ function getDominantNeighborLandBiome(biomeGrid, x, y) {
 function getRiverStyle(surroundBiome, nearSea) {
     // default classic blue
     let tint = [37, 174, 255], // base shallow-water blue
-        extraWidth = 0,      // extra halo pixels
-        alpha = 0.16,        // Light Halo opacity
-        speedMul = 0.4,      // baseline matches your lowlandRiver default
-        fishBoost = 0;       // small density bias
+        extraWidth = 0, // extra halo pixels
+        alpha = 0.16, // Light Halo opacity
+        speedMul = 0.4, // baseline matches your lowlandRiver default
+        fishBoost = 0; // small density bias
 
     if (nearSea) { // delta behavior
-        tint = [60, 170, 200];   // murkier
+        tint = [60, 170, 200]; // murkier
         extraWidth += 1;
         alpha = 0.22;
         fishBoost += 0.2; // denser fish in deltas
@@ -195,20 +193,20 @@ function getRiverStyle(surroundBiome, nearSea) {
     if (!surroundBiome) return {tint, extraWidth, alpha, speedMul, fishBoost};
 
     if (/mountain|snowy|ice/i.test(surroundBiome)) {
-        tint = [30, 140, 210];        // cooler / glacial hint
-        speedMul = 0.45;            // slightly faster
+        tint = [30, 140, 210]; // cooler / glacial hint
+        speedMul = 0.45; // slightly faster
         alpha = Math.max(alpha, 0.18);
     } else if (/forest|plain|taiga/i.test(surroundBiome)) {
-        tint = [37, 174, 255];        // classic
+        tint = [37, 174, 255]; // classic
         speedMul = 0.4;
     } else if (/jungle|swamp/i.test(surroundBiome)) {
-        tint = [85, 70, 40];        // tea/blackwater
-        extraWidth += 1;            // marshy fringing
+        tint = [85, 70, 40]; // tea/blackwater
+        extraWidth += 1; // marshy fringing
         alpha = 0.22;
-        speedMul = 0.35;            // slower
-        fishBoost += 0.15;          // catfish/piranha thrive
+        speedMul = 0.35; // slower
+        fishBoost += 0.15; // catfish/piranha thrive
     } else if (/desert|badlands/i.test(surroundBiome)) {
-        tint = [185, 150, 70];      // silty/yellow-brown water
+        tint = [185, 150, 70]; // silty/yellow-brown water
         extraWidth += 1;
         alpha = 0.2;
         speedMul = 0.4;
@@ -268,7 +266,7 @@ function buildVillageInChunk(chunkX, chunkY, biomeIdx, waterMask, seed) {
     const houses = [];
     const rand = seededRandom(chunkX * 8881 + chunkY * 113 + seed + 911);
     const nHouses = 4 + Math.floor(rand() * 4); // 4..7
-    const ringR = 6 + Math.floor(rand() * 4);   // ring radius
+    const ringR = 6 + Math.floor(rand() * 4); // ring radius
 
     const placeIfLand = (wx, wy, emoji, type, extra = {}) => {
         const cx = Math.floor(wx) - wx0, cy = Math.floor(wy) - wy0;
@@ -325,7 +323,7 @@ function buildVillageInChunk(chunkX, chunkY, biomeIdx, waterMask, seed) {
             workX: work.x,
             workY: work.y,
             cx: centerWx,
-            cy: centerWy,           // village center
+            cy: centerWy, // village center
             phase: rand() * Math.PI * 2,
             speed: 0.9 + rand() * 0.4
         });
@@ -351,8 +349,8 @@ function generateChunkData(chunkX, chunkY, sliders, sunVector, seed) {
 
     for (let y = 0; y < CHUNK_SIZE; y++) {
         for (let x = 0; x < CHUNK_SIZE; x++) {
-            const worldX = chunkX * CHUNK_SIZE + x + 0.5;   // ← +0.5
-            const worldY = chunkY * CHUNK_SIZE + y + 0.5;   // ← +0.5
+            const worldX = chunkX * CHUNK_SIZE + x + 0.5; // ← +0.5
+            const worldY = chunkY * CHUNK_SIZE + y + 0.5; // ← +0.5
             const biome = getBiomeAtWorldCoords(worldX, worldY, perlin, sliders);
             const bIndex = BIOME_TO_INDEX.get(biome);
             const i1d = y * CHUNK_SIZE + x;
@@ -530,8 +528,8 @@ function generateChunkData(chunkX, chunkY, sliders, sunVector, seed) {
             offsetX,
             offsetY,
             swayPhase: seededRandom(c.x * 777 + c.y * 333 + seed + 9)() * Math.PI * 2, // NEW: spring state (bending with inertia)
-            bend: 0,       // current tip offset in pixels
-            bendVel: 0     // velocity of the bend (px/s)
+            bend: 0, // current tip offset in pixels
+            bendVel: 0 // velocity of the bend (px/s)
         };
 
     });
@@ -607,7 +605,7 @@ function generateChunkData(chunkX, chunkY, sliders, sunVector, seed) {
             emoji,
             vx: Math.cos(theta) * 0.1,
             vy: Math.sin(theta) * 0.1,
-            drag,                       // 0..1 less = drifts mostly with flow
+            drag, // 0..1 less = drifts mostly with flow
             phase: seededRandom(c.x * 5 + c.y * 3 + seed)() * Math.PI * 2
         };
     });
@@ -720,7 +718,7 @@ const iso = {
     }, // width
     tileH() {
         return parseInt(sliders.pixelScale.slider.value);
-    },     // height = width/2
+    }, // height = width/2
     elev() {
         const pixelScale = parseInt(sliders.pixelScale.slider.value);
         return pixelScale * 1.3;
@@ -740,8 +738,8 @@ function worldToScreenIso(wx, wy, wz, centerX, centerY) {
 function screenToWorldIso(sx, sy, centerX, centerY) {
     const tw = iso.tileW(), th = iso.tileH();
     const dx = sx - centerX, dy = sy - centerY;
-    const A = dx / (tw / 2);  // wx - wy
-    const B = dy / (th / 2);  // wx + wy
+    const A = dx / (tw / 2); // wx - wy
+    const B = dy / (th / 2); // wx + wy
     return {x: (A + B) / 2, y: (B - A) / 2};
 }
 
@@ -749,13 +747,66 @@ function screenToWorldIso(sx, sy, centerX, centerY) {
 function fillIsoDiamond(ctx, cx, cy, tw, th, fillStyle) {
     ctx.fillStyle = fillStyle;
     ctx.beginPath();
-    ctx.moveTo(cx, cy - th / 2);      // top
-    ctx.lineTo(cx + tw / 2, cy);      // right
-    ctx.lineTo(cx, cy + th / 2);      // bottom
-    ctx.lineTo(cx - tw / 2, cy);      // left
+    ctx.moveTo(cx, cy - th / 2); // top
+    ctx.lineTo(cx + tw / 2, cy); // right
+    ctx.lineTo(cx, cy + th / 2); // bottom
+    ctx.lineTo(cx - tw / 2, cy); // left
     ctx.closePath();
     ctx.fill();
 }
+
+// --- NEW: Helper to draw a generic isometric box (e.g., a cube) ---
+function drawIsoBox(ctx, wx, wy, wz, size, color, proj, lightK) {
+    const elevScale = iso.elev();
+    const tw = iso.tileW();
+
+    // Calculate screen coordinates for all 8 corners of the box
+    // Bottom face
+    const pB_TL = proj(wx, wy, wz);
+    const pB_TR = proj(wx + size, wy, wz);
+    const pB_BL = proj(wx, wy + size, wz);
+    const pB_BR = proj(wx + size, wy + size, wz);
+
+    // Top face
+    const topWz = wz + size * elevScale;
+    const pT_TL = proj(wx, wy, topWz);
+    const pT_TR = proj(wx + size, wy, topWz);
+    const pT_BL = proj(wx, wy + size, topWz);
+    const pT_BR = proj(wx + size, wy + size, topWz);
+
+    const [r, g, b] = color;
+
+    // Draw left face (darkest)
+    ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.7)}, ${Math.round(g * lightK * 0.7)}, ${Math.round(b * lightK * 0.7)})`;
+    ctx.beginPath();
+    ctx.moveTo(pT_TL.x, pT_TL.y);
+    ctx.lineTo(pB_TL.x, pB_TL.y);
+    ctx.lineTo(pB_BL.x, pB_BL.y);
+    ctx.lineTo(pT_BL.x, pT_BL.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw right face (medium shade)
+    ctx.fillStyle = `rgb(${Math.round(r * lightK * 0.85)}, ${Math.round(g * lightK * 0.85)}, ${Math.round(b * lightK * 0.85)})`;
+    ctx.beginPath();
+    ctx.moveTo(pT_TR.x, pT_TR.y);
+    ctx.lineTo(pB_TR.x, pB_TR.y);
+    ctx.lineTo(pB_BR.x, pB_BR.y);
+    ctx.lineTo(pT_BR.x, pT_BR.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw top face (lightest)
+    ctx.fillStyle = `rgb(${Math.round(r * lightK)}, ${Math.round(g * lightK)}, ${Math.round(b * lightK)})`;
+    ctx.beginPath();
+    ctx.moveTo(pT_TL.x, pT_TL.y);
+    ctx.lineTo(pT_TR.x, pT_TR.y);
+    ctx.lineTo(pT_BR.x, pT_BR.y);
+    ctx.lineTo(pT_BL.x, pT_BL.y);
+    ctx.closePath();
+    ctx.fill();
+}
+
 
 // --- NEW: toggle + label helper + debug store ---
 let showTileHeights = true; // press "K" to toggle
@@ -802,7 +853,7 @@ function fillIsoDiamondWater(ctx, cx, cy, tw, th, baseRGB, depth01, lightK, sunV
     const bx = cx + sunVec[0] * tw * 0.45, by = cy + sunVec[1] * th * 0.45;
 
     const kNear = Math.max(0.55, lightK) * (1.00 + shallowBoost); // brighter on sun side, esp. shallow
-    const kFar = Math.max(0.55, lightK) * (1.00 - deepDarken);   // darker away, esp. deep
+    const kFar = Math.max(0.55, lightK) * (1.00 - deepDarken); // darker away, esp. deep
 
     const cNear = `rgb(${Math.min(255, Math.round(r0 * kNear))},${Math.min(255, Math.round(g0 * kNear))},${Math.min(255, Math.round(b0 * kNear))})`;
     const cFar = `rgb(${Math.min(255, Math.round(r0 * kFar))},${Math.min(255, Math.round(g0 * kFar))},${Math.min(255, Math.round(b0 * kFar))})`;
@@ -820,7 +871,7 @@ function fillIsoDiamondWater(ctx, cx, cy, tw, th, baseRGB, depth01, lightK, sunV
     const ca = (1 - depth01) * 0.25;
     if (ca > 0.01) {
         const t = performance.now() * 0.001 + rippleSeed * 12.345;
-        const nx = -sunVec[1], ny = sunVec[0];             // across-sun direction
+        const nx = -sunVec[1], ny = sunVec[0]; // across-sun direction
         ctx.globalAlpha = ca * 0.25;
         ctx.strokeStyle = 'rgba(255,255,255,0.9)';
         ctx.lineWidth = Math.max(1, tw * 0.03);
@@ -839,8 +890,8 @@ function drawIsoWorld(deltaTime = 0) {
     if (isGenerating || !perlin) return {visibleTrees: 0, visibleFish: 0};
 
     // --- constants just for this pass (units are in absolute height 0..255) ---
-    const RIVER_SURFACE_DROP_UNITS = 6;   // river surface sits this much below local ground
-    const RIVER_WATER_DEPTH_UNITS = 4;    // shallow river thickness under surface
+    const RIVER_SURFACE_DROP_UNITS = 0; // river surface sits this much below local ground
+    const RIVER_WATER_DEPTH_UNITS = 4; // shallow river thickness under surface
 
     nearbyTradeNpc = null;
 
@@ -871,8 +922,16 @@ function drawIsoWorld(deltaTime = 0) {
     const pH = getAbsoluteHeight(Math.round(player.x), Math.round(player.y), perlin, slidersVals, heightCache);
     const pWz = (pH - SEA_LEVEL_ABS) * elevScale;
 
+    // Use a simplified projection for the tile drawing logic
     const proj = (wx, wy, wz = 0) => worldToScreenIso(wx - player.x, wy - player.y, wz - pWz, camX, camY);
 
+
+    // --- outline styles for isometric view ---
+    const OUTLINE_WIDTH = Math.max(1, pixelScale * 0.12);
+    const OUTLINE_TOP   = 'rgba(0,0,0,0.18)';
+    const OUTLINE_SIDE  = 'rgba(0,0,0,0.25)';
+    ctx.lineJoin = 'miter';
+    ctx.miterLimit = 2;
     const tilesAcross = Math.ceil(vw / tw) + 4;
     const tilesDown = Math.ceil(vh / th) + 6;
     const startX = Math.floor(player.x - tilesAcross);
@@ -880,23 +939,21 @@ function drawIsoWorld(deltaTime = 0) {
     const startY = Math.floor(player.y - tilesDown);
     const endY = Math.ceil(player.y + tilesDown);
 
-    let built = 0;
     for (let wy = startY; wy <= endY; wy += CHUNK_SIZE) {
         for (let wx = startX; wx <= endX; wx += CHUNK_SIZE) {
             const cx = Math.floor(wx / CHUNK_SIZE), cy = Math.floor(wy / CHUNK_SIZE);
             const key = `${cx},${cy}`;
-            if (!chunkCache.has(key) && built < MAX_CHUNKS_PER_FRAME) {
+            if (!chunkCache.has(key)) {
                 generateChunkData(cx, cy, slidersVals, sunVector, seed);
-                built++;
             }
         }
     }
 
     const allVisibleTiles = [];
     for (let y = startY; y <= endY; y++) {
-        for (let x = startX; x <= endX; x++) allVisibleTiles.push({x, y, s: x + y});
+        for (let x = startX; x <= endX; x++) allVisibleTiles.push({x, y});
     }
-    allVisibleTiles.sort((a, b) => (a.x + a.y) - (b.x + b.y) || a.y - b.y || a.x - b.x);
+    allVisibleTiles.sort((a, b) => (a.x + a.y) - (b.x + b.y));
 
     const countsByIndex = new Uint32Array(BIOME_NAME.length);
     hoverTile = null;
@@ -920,7 +977,7 @@ function drawIsoWorld(deltaTime = 0) {
         const biomeName = idx >= 0 ? BIOME_NAME[idx] : getBiomeAtWorldCoords(bestMatch.wx, bestMatch.wy, perlin, slidersVals);
         const Hraw = getAbsoluteHeight(bestMatch.wx, bestMatch.wy, perlin, slidersVals);
         const isWater = isWaterLikeBiomeName(biomeName);
-        const Htop = isWater ? SEA_LEVEL_ABS : Hraw;
+        const Htop = Hraw;
         hoverTile = {
             wx: bestMatch.wx,
             wy: bestMatch.wy,
@@ -938,7 +995,13 @@ function drawIsoWorld(deltaTime = 0) {
     }
 
     lastVisibleTiles = [];
-    // -------- Pass 1: Ground & Water Side Faces --------
+    let visibleTrees = 0, visibleFish = 0;
+    const objects = [];
+    const allVisibleObjects = [];
+    const drawnObjects = new Set();
+
+
+    // --- Single pass to draw terrain and objects
     for (const t of allVisibleTiles) {
         const wx = t.x, wy = t.y;
         const idx = getBiomeIndexFromCache(wx, wy);
@@ -947,20 +1010,12 @@ function drawIsoWorld(deltaTime = 0) {
 
         const isWater = isWaterLikeBiomeName(biomeName);
         const Hraw = getAbsoluteHeight(wx, wy, perlin, slidersVals, heightCache);
-
-        // --- NEW: Dynamic River Heights ---
-        // For rivers, calculate a smoothed height based on neighboring land tiles.
         const isRiver = /river/i.test(biomeName);
         const isOcean = isWater && !isRiver;
         let riverHtop = SEA_LEVEL_ABS;
         if (isRiver) {
             let neighborLandHeights = [];
-            const neighbors = [
-                getAbsoluteHeight(wx - 1, wy, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx + 1, wy, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx, wy - 1, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx, wy + 1, perlin, slidersVals, heightCache)
-            ];
+            const neighbors = [getAbsoluteHeight(wx - 1, wy, perlin, slidersVals, heightCache), getAbsoluteHeight(wx + 1, wy, perlin, slidersVals, heightCache), getAbsoluteHeight(wx, wy - 1, perlin, slidersVals, heightCache), getAbsoluteHeight(wx, wy + 1, perlin, slidersVals, heightCache)];
 
             for (const h of neighbors) {
                 if (h > SEA_LEVEL_ABS) neighborLandHeights.push(h);
@@ -973,144 +1028,128 @@ function drawIsoWorld(deltaTime = 0) {
                 riverHtop = Math.max(SEA_LEVEL_ABS, Hraw);
             }
         }
-        const currentHtop = isOcean ? SEA_LEVEL_ABS : (isRiver ? riverHtop : Hraw);
+        const currentHtop = Hraw;const p_C = proj(wx, wy, (currentHtop - SEA_LEVEL_ABS) * elevScale);
 
-        // Calculate neighbor heights for side faces
+        if (p_C.x < -tw || p_C.x > vw + tw || p_C.y < -th - 200 || p_C.y > vh + 200) continue;
+
+        lastVisibleTiles.push({wx, wy, sx: p_C.x, sy: p_C.y});
+
+        const lightness = isLightingEnabled ? getPixelLightness(wx, wy, currentHtop / 255, perlin.height, slidersVals, sunVector) : 1.0;
+        const k = lightness;
+
+        // Draw sides first to be occluded by tile tops
         const H_E_raw = getAbsoluteHeight(wx + 1, wy, perlin, slidersVals, heightCache);
         const H_S_raw = getAbsoluteHeight(wx, wy + 1, perlin, slidersVals, heightCache);
         const isWater_E = isWaterLikeBiomeName(getBiomeAtWorldCoords(wx + 1, wy, perlin, slidersVals));
         const isWater_S = isWaterLikeBiomeName(getBiomeAtWorldCoords(wx, wy + 1, perlin, slidersVals));
-        const H_E = isWater_E ? SEA_LEVEL_ABS : H_E_raw;
-        const H_S = isWater_S ? SEA_LEVEL_ABS : H_S_raw;
-
-        const p_C = proj(wx, wy, (currentHtop - SEA_LEVEL_ABS) * elevScale);
-
-        // Don't draw if off-screen
-        if (p_C.x < -tw || p_C.x > vw + tw || p_C.y < -th - 200 || p_C.y > vh + 200) continue;
-
-        // Collect visible tile data for hover detection
-        lastVisibleTiles.push({wx, wy, sx: p_C.x, sy: p_C.y});
-
+        const H_E = H_E_raw;
+        const H_S = H_S_raw;
         const p_E = proj(wx + 1, wy, (H_E - SEA_LEVEL_ABS) * elevScale);
         const p_S = proj(wx, wy + 1, (H_S - SEA_LEVEL_ABS) * elevScale);
 
-        const lightness = isLightingEnabled ? getPixelLightness(wx, wy, currentHtop / 255, perlin.height, slidersVals, sunVector) : 1.0;
+        const pT = {x: p_C.x, y: p_C.y - th / 2};
+        const pR = {x: p_C.x + tw / 2, y: p_C.y};
+        const pB = {x: p_C.x, y: p_C.y + th / 2};
+        const pL = {x: p_C.x - tw / 2, y: p_C.y};
 
-        // Side faces
-        if (!isWater) { // Only draw side faces for land
-            const k = lightness;
 
-            // Draw right face (South-East) if there is a height difference
-            if (currentHtop > H_S) {
-                const rightFill = `rgb(${Math.round(baseColor[0] * k * 0.9)}, ${Math.round(baseColor[1] * k * 0.9)}, ${Math.round(baseColor[2] * k * 0.9)})`;
-                ctx.fillStyle = rightFill;
-                ctx.beginPath();
-                ctx.moveTo(p_C.x, p_C.y + th/2); // Bottom corner of current tile top face
-                ctx.lineTo(p_C.x + tw/2, p_C.y); // Right corner of current tile top face
-                ctx.lineTo(p_S.x + tw/2, p_S.y); // Right corner of southern neighbor top face
-                ctx.lineTo(p_S.x, p_S.y + th/2); // Bottom corner of southern neighbor top face
-                ctx.closePath();
-                ctx.fill();
-
-                // Fill the drop below
-                ctx.beginPath();
-                ctx.moveTo(p_S.x, p_S.y + th/2); // Bottom corner of southern neighbor top face
-                ctx.lineTo(p_C.x, p_C.y + th/2); // Bottom corner of current tile top face
-                ctx.lineTo(p_C.x, p_C.y + th/2 + (currentHtop - H_S) * elevScale); // Bottom corner of current tile side face
-                ctx.lineTo(p_S.x, p_S.y + th/2 + (currentHtop - H_S) * elevScale); // Bottom corner of southern neighbor side face
-                ctx.closePath();
-                ctx.fill();
-            }
-
-            // Draw left face (South-West) if there is a height difference
-            if (currentHtop > H_E) {
-                const leftFill = `rgb(${Math.round(baseColor[0] * k * 0.75)}, ${Math.round(baseColor[1] * k * 0.75)}, ${Math.round(baseColor[2] * k * 0.75)})`;
-                ctx.fillStyle = leftFill;
-                ctx.beginPath();
-                ctx.moveTo(p_C.x, p_C.y + th/2); // Bottom corner of current tile top face
-                ctx.lineTo(p_C.x - tw/2, p_C.y); // Left corner of current tile top face
-                ctx.lineTo(p_E.x - tw/2, p_E.y); // Left corner of eastern neighbor top face
-                ctx.lineTo(p_E.x, p_E.y + th/2); // Bottom corner of eastern neighbor top face
-                ctx.closePath();
-                ctx.fill();
-
-                // Fill the drop below
-                ctx.beginPath();
-                ctx.moveTo(p_E.x, p_E.y + th/2); // Bottom corner of eastern neighbor top face
-                ctx.lineTo(p_C.x, p_C.y + th/2); // Bottom corner of current tile top face
-                ctx.lineTo(p_C.x, p_C.y + th/2 + (currentHtop - H_E) * elevScale); // Bottom corner of current tile side face
-                ctx.lineTo(p_E.x, p_E.y + th/2 + (currentHtop - H_E) * elevScale); // Bottom corner of eastern neighbor side face
-                ctx.closePath();
-                ctx.fill();
-            }
+// LEFT/BOTTOM face (South → uses H_S)
+        if (currentHtop > H_S) {
+            const leftFill = `rgb(${Math.round(baseColor[0] * k)}, ${Math.round(baseColor[1] * k)}, ${Math.round(baseColor[2] * k)})`;
+            ctx.fillStyle = leftFill;
+            ctx.beginPath();
+            const dh = (currentHtop - H_S) * elevScale;
+            const EOL = 1; // tiny overlap into the top to hide hairlines
+            // top edge follows the diamond edge: pL → pB
+            ctx.moveTo(pL.x, pL.y - EOL);
+            ctx.lineTo(pB.x, pB.y - EOL);
+            // drop by dh
+            ctx.lineTo(pB.x, pB.y + dh);
+            ctx.lineTo(pL.x, pL.y + dh);
+            ctx.closePath();
+            ctx.fill();
+            // outline left and bottom edges
+            ctx.save();
+            ctx.lineWidth = OUTLINE_WIDTH;
+            ctx.strokeStyle = OUTLINE_SIDE;
+            ctx.beginPath();
+            // left vertical edge
+            ctx.moveTo(pL.x, pL.y);
+            ctx.lineTo(pL.x, pL.y + dh);
+            // bottom edge
+            ctx.moveTo(pL.x, pL.y + dh);
+            ctx.lineTo(pB.x, pB.y + dh);
+            ctx.stroke();
+            ctx.restore();
         }
-    }
 
-    // -------- Pass 2: Ground & Water Top Faces --------
-    for (const t of allVisibleTiles) {
-        const wx = t.x, wy = t.y;
-        const idx = getBiomeIndexFromCache(wx, wy);
-        const biomeName = idx >= 0 ? BIOME_NAME[idx] : getBiomeAtWorldCoords(wx, wy, perlin, slidersVals);
-        const baseColor = idx >= 0 ? BIOME_COLOR_ARRAY[idx] : BIOME_COLORS[biomeName] || [255, 0, 0];
-
-        const isWater = isWaterLikeBiomeName(biomeName);
-        const Hraw = getAbsoluteHeight(wx, wy, perlin, slidersVals, heightCache);
-
-        const isRiver = /river/i.test(biomeName);
-        const isOcean = isWater && !isRiver;
-        let riverHtop = SEA_LEVEL_ABS;
-        if (isRiver) {
-            let neighborLandHeights = [];
-            const neighbors = [
-                getAbsoluteHeight(wx - 1, wy, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx + 1, wy, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx, wy - 1, perlin, slidersVals, heightCache),
-                getAbsoluteHeight(wx, wy + 1, perlin, slidersVals, heightCache)
-            ];
-
-            for (const h of neighbors) {
-                if (h > SEA_LEVEL_ABS) neighborLandHeights.push(h);
-            }
-
-            if (neighborLandHeights.length > 0) {
-                const avgHeight = neighborLandHeights.reduce((a, b) => a + b) / neighborLandHeights.length;
-                riverHtop = Math.min(Hraw, avgHeight - RIVER_SURFACE_DROP_UNITS);
-            } else {
-                riverHtop = Math.max(SEA_LEVEL_ABS, Hraw);
-            }
+// RIGHT face (East → uses H_E)
+        if (currentHtop > H_E) {
+            const rightFill = `rgb(${Math.round(baseColor[0] * k)}, ${Math.round(baseColor[1] * k)}, ${Math.round(baseColor[2] * k)})`;
+            ctx.fillStyle = rightFill;
+            ctx.beginPath();
+            const dh = (currentHtop - H_E) * elevScale;
+            const EOL = 1;
+            // top edge follows the diamond edge: pR → pB
+            ctx.moveTo(pR.x, pR.y - EOL);
+            ctx.lineTo(pB.x, pB.y - EOL);
+            // drop by dh
+            ctx.lineTo(pB.x, pB.y + dh);
+            ctx.lineTo(pR.x, pR.y + dh);
+            ctx.closePath();
+            ctx.fill();
+            // outline right and bottom edges
+            ctx.save();
+            ctx.lineWidth = OUTLINE_WIDTH;
+            ctx.strokeStyle = OUTLINE_SIDE;
+            ctx.beginPath();
+            // right vertical edge
+            ctx.moveTo(pR.x, pR.y);
+            ctx.lineTo(pR.x, pR.y + dh);
+            // bottom edge
+            ctx.moveTo(pB.x, pB.y + dh);
+            ctx.lineTo(pR.x, pR.y + dh);
+            ctx.stroke();
+            ctx.restore();
         }
-        const currentHtop = isOcean ? SEA_LEVEL_ABS : (isRiver ? riverHtop : Hraw);
 
-        const p = proj(wx, wy, (currentHtop - SEA_LEVEL_ABS) * elevScale);
-        if (p.x < -tw || p.x > vw + tw || p.y < -th - 200 || p.y > vh + 200) continue;
 
-        const cx = Math.round(p.x);
-        const cy = Math.round(p.y);
-        const lightness = isLightingEnabled ? getPixelLightness(wx, wy, currentHtop / 255, perlin.height, slidersVals, sunVector) : 1.0;
-
+        // Draw the top face
         if (isWater) {
             const depthUnits = isOcean ? Math.max(0, SEA_LEVEL_ABS - Hraw) : RIVER_WATER_DEPTH_UNITS;
             const depth01 = Math.max(0, Math.min(1, depthUnits / 128));
-            fillIsoDiamondWater(ctx, cx, cy, tw, th, baseColor, depth01, lightness, sunVector, (wx * 73 + wy * 91) * 0.001);
+            fillIsoDiamondWater(ctx, p_C.x, p_C.y, tw, th, baseColor, depth01, lightness, sunVector, (wx * 73 + wy * 91) * 0.001);
         } else {
-            const kTop = lightness;
-            const topFill = `rgb(${Math.round(baseColor[0] * kTop)},
-                          ${Math.round(baseColor[1] * kTop)},
-                          ${Math.round(baseColor[2] * kTop)})`;
-            fillIsoDiamond(ctx, cx, cy, tw, th, topFill);
+            const topFill = `rgb(${Math.round(baseColor[0] * k)},
+                              ${Math.round(baseColor[1] * k)},
+                              ${Math.round(baseColor[2] * k)})`;
+            fillIsoDiamond(ctx, p_C.x, p_C.y, tw, th, topFill);
+            // outline top diamond
+            ctx.lineWidth = OUTLINE_WIDTH;
+            ctx.strokeStyle = OUTLINE_TOP;
+            pathIsoDiamond(ctx, p_C.x, p_C.y, tw, th);
+            ctx.stroke();
         }
 
-        ctx.save();
-        ctx.lineWidth = Math.max(1, pixelScale * 0.08);
-        ctx.strokeStyle = 'rgba(0,0,0,0.14)';
-        pathIsoDiamond(ctx, cx, cy, tw, th);
-        ctx.stroke();
-        ctx.restore();
+        // --- Draw object on this tile
+        const chunk = getChunk(Math.floor(wx / CHUNK_SIZE), Math.floor(wy / CHUNK_SIZE));
+        if (chunk && chunk.objects) {
+            for (const obj of chunk.objects) {
+                if (obj.x === wx && obj.y === wy) {
+                    // Check if object is already drawn to avoid duplicates on chunk boundaries
+                    if (!drawnObjects.has(obj)) {
+                        allVisibleObjects.push(obj);
+                        drawnObjects.add(obj);
+                    }
+                }
+            }
+        }
+
 
         if (showTileHeights) {
             const label = String(Math.round(currentHtop));
-            const labelX = (cx | 0);
-            const labelY = ((cy - th / 2) | 0) - 2;
+            const labelX = (p_C.x | 0);
+            const labelY = ((p_C.y - th / 2) | 0) - 2;
             const labelPx = Math.max(8, Math.min(12, (th * 0.65) | 0));
             drawCenteredLabel(ctx, labelX, labelY, label, labelPx);
         }
@@ -1120,7 +1159,7 @@ function drawIsoWorld(deltaTime = 0) {
             ctx.lineWidth = Math.max(1.5, pixelScale * 0.1);
             ctx.strokeStyle = 'rgba(255,255,0,0.95)';
             ctx.fillStyle = 'rgba(255,255,0,0.15)';
-            pathIsoDiamond(ctx, cx, cy, tw, th);
+            pathIsoDiamond(ctx, p_C.x, p_C.y, tw, th);
             ctx.fill();
             ctx.stroke();
             ctx.restore();
@@ -1128,6 +1167,70 @@ function drawIsoWorld(deltaTime = 0) {
 
         if (idx >= 0) countsByIndex[idx]++;
     }
+
+    // Sort all objects for correct rendering order
+    allVisibleObjects.sort((a, b) => {
+        const a_depth = a.x + a.y + (a.type === 'tree' ? a.height * 0.5 : 0);
+        const b_depth = b.x + b.y + (b.type === 'tree' ? b.height * 0.5 : 0);
+        return a_depth - b_depth;
+    });
+
+    // Pass 2: Draw all sorted objects
+    for (const obj of allVisibleObjects) {
+        let objWz = (getAbsoluteHeight(obj.x, obj.y, perlin, slidersVals) - SEA_LEVEL_ABS);
+
+        // A simple example for a cube-like house
+        if (obj.emoji === '🏠') {
+            const size = 1.0;
+            const color = [200, 150, 100]; // a nice house color
+            drawIsoBox(ctx, obj.x, obj.y, objWz, size, color, proj, isLightingEnabled ? getPixelLightness(obj.x, obj.y, objWz, perlin.height, slidersVals, sunVector) : 1.0);
+            continue;
+        } else if (obj.emoji === '🛖') { // another example
+            const size = 1.0;
+            const color = [150, 120, 80];
+            drawIsoBox(ctx, obj.x, obj.y, objWz, size, color, proj, isLightingEnabled ? getPixelLightness(obj.x, obj.y, objWz, perlin.height, slidersVals, sunVector) : 1.0);
+            continue;
+        }
+
+        const p = proj(obj.x, obj.y, objWz);
+
+        if (obj.type === 'tree') {
+            visibleTrees++;
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y + pixelScale * 0.25, pixelScale * 0.45, pixelScale * 0.22, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+            ctx.font = `${Math.max(10, pixelScale * (obj.height ? 0.8 + obj.height * 0.12 : 1.1))}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(obj.emoji, p.x, p.y);
+        } else if (obj.type === 'fish' || obj.type === 'float') {
+            visibleFish++;
+            ctx.save();
+            ctx.globalAlpha = (obj.type === 'fish') ? 0.75 : 0.9;
+            ctx.font = `${Math.max(10, pixelScale * 0.9)}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(obj.emoji, p.x, p.y);
+            ctx.restore();
+        } else if (obj.type === 'npc') {
+            renderNpc(obj, p.x - pixelScale / 2, p.y - pixelScale / 2, pixelScale, ctx);
+            const d = Math.hypot(obj.x - player.x, obj.y - player.y);
+            const canTrade = (typeof invHasAll === 'function') ? invHasAll((obj.offer && obj.offer.give) || {}) : true;
+            const isTrader = (obj.role === 'trader') || !!obj.offer;
+            if (isTrader && d < 1.6 && canTrade) {
+                if (!nearbyTradeNpc || d < nearbyTradeNpc._d) {
+                    nearbyTradeNpc = {
+                        npc: obj, sx: p.x, sy: p.y - pixelScale * 0.9, _d: d
+                    };
+                }
+            }
+        }
+    }
+
 
     // --- Tile highlight & info (rendered on top of terrain) ----
     if (hoverTile) {
@@ -1174,8 +1277,8 @@ function drawIsoWorld(deltaTime = 0) {
         info.style.pointerEvents = 'none';
         document.body.appendChild(info);
     }
-    const t = selectedTile || hoverTile;
-    if (t) {
+    const selTile = selectedTile || hoverTile;
+    if (selTile) {
         const playerX = Math.round(player.x);
         const playerY = Math.round(player.y);
         const playerSpeed = getSliderValues().playerSpeed;
@@ -1184,93 +1287,10 @@ function drawIsoWorld(deltaTime = 0) {
         const cameraX = Math.round(player.x);
         const cameraY = Math.round(player.y);
 
-        info.innerHTML =
-            `<b>Tile</b> ${t.wx}, ${t.wy}<br>` +
-            `Biome: ${t.biomeName || '—'}<br>` +
-            `Top: ${Math.round(t.Htop) ?? '—'} | Raw: ${Math.round(t.Hraw) ?? '—'}<br>` +
-            `Water: ${t.isWater ? (t.isOcean ? 'Ocean' : (t.isRiver ? 'River' : 'Yes')) : 'No'}<br>` +
-            `---<br>` +
-            `<b>Player Pos</b> ${playerX}, ${playerY}<br>` +
-            `<b>Camera Pos</b> ${cameraX}, ${cameraY}<br>` +
-            `<b>Player Speed</b> ${playerSpeed} base | ${speedModifier}x mod.`;
+        info.innerHTML = `<b>Tile</b> ${selTile.wx}, ${selTile.wy}<br>` + `Biome: ${selTile.biomeName || '—'}<br>` + `Top: ${Math.round(selTile.Htop) ?? '—'} | Raw: ${Math.round(selTile.Hraw) ?? '—'}<br>` + `Water: ${selTile.isWater ? (selTile.isOcean ? 'Ocean' : (selTile.isRiver ? 'River' : 'Yes')) : 'No'}<br>` + `---<br>` + `<b>Player Pos</b> ${playerX}, ${playerY}<br>` + `<b>Camera Pos</b> ${cameraX}, ${cameraY}<br>` + `<b>Player Speed</b> ${playerSpeed} base | ${speedModifier}x mod.`;
         info.style.display = 'block';
     } else {
         info.style.display = 'none';
-    }
-
-    // -------- Collect and draw visible objects (back-to-front) --------
-    let visibleTrees = 0, visibleFish = 0;
-    const objects = [];
-    for (let wy = startY; wy <= endY; wy += CHUNK_SIZE) {
-        for (let wx = startX; wx <= endX; wx += CHUNK_SIZE) {
-            const cx = Math.floor(wx / CHUNK_SIZE), cy = Math.floor(wy / CHUNK_SIZE);
-            const ch = chunkCache.get(`${cx},${cy}`);
-            if (!ch || !ch.objects) continue;
-            for (const o of ch.objects) {
-                if (o.x < startX || o.x > endX || o.y < startY || o.y > endY) continue;
-                objects.push(o);
-            }
-        }
-    }
-    objects.sort((a, b) => (a.x + a.y) - (b.x + b.y));
-
-    for (const obj of objects) {
-        const H = getAbsoluteHeight(obj.x, obj.y, perlin, slidersVals, heightCache);
-        let wz = (H - SEA_LEVEL_ABS) * elevScale;
-        if (obj.type === 'tree') wz += pixelScale * 0.6;
-
-        const p = proj(obj.x, obj.y, wz);
-        if (p.x < -40 || p.x > vw + 40 || p.y < -60 || p.y > vh + 60) continue;
-
-        if (obj.type === 'tree') {
-            visibleTrees++;
-            ctx.save();
-            ctx.globalAlpha = 0.35;
-            ctx.fillStyle = '#000';
-            ctx.beginPath();
-            ctx.ellipse(p.x, p.y + pixelScale * 0.25, pixelScale * 0.45, pixelScale * 0.22, 0, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
-
-            ctx.font = `${Math.max(10, pixelScale * (obj.height ? 0.8 + obj.height * 0.12 : 1.1))}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(obj.emoji, p.x, p.y);
-        } else if (obj.type === 'fish' || obj.type === 'float') {
-            visibleFish++;
-            ctx.save();
-            ctx.globalAlpha = (obj.type === 'fish') ? 0.75 : 0.9;
-            ctx.font = `${Math.max(10, pixelScale * 0.9)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(obj.emoji, p.x, p.y);
-            ctx.restore();
-        } else if (obj.type === 'npc') {
-            renderNpc(obj, p.x - pixelScale / 2, p.y - pixelScale / 2, pixelScale, ctx);
-            const d = Math.hypot(obj.x - player.x, obj.y - player.y);
-            const canTrade = (typeof invHasAll === 'function') ? invHasAll((obj.offer && obj.offer.give) || {}) : true;
-            const isTrader = (obj.role === 'trader') || !!obj.offer;
-            if (isTrader && d < 1.6 && canTrade) {
-                if (!nearbyTradeNpc || d < nearbyTradeNpc._d) {
-                    nearbyTradeNpc = {npc: obj, sx: p.x, sy: p.y - pixelScale * 0.9, _d: d};
-                }
-            }
-        }
-    }
-
-    if (showTileHeights) {
-        const step = (pixelScale < 12) ? 2 : 1;
-        for (let ty = Math.floor(startY); ty < Math.ceil(endY); ty += step) {
-            for (let tx = Math.floor(startX); tx < Math.ceil(endX); tx += step) {
-                const bedH = getAbsoluteHeight(tx, ty, perlin, slidersVals, heightCache);
-                const Htop = isWaterLikeAt(tx, ty, perlin) ? SEA_LEVEL_ABS : bedH;
-                const p = proj(tx, ty, (Htop - SEA_LEVEL_ABS) * elevScale);
-
-                if (p.x < -tw || p.x > vw + tw || p.y < -th - 200 || p.y > vh + 200) continue;
-
-                drawCenteredLabel(ctx, p.x, p.y - th / 2 - 2, String(Math.round(Htop)), Math.max(8, Math.min(12, (th * 0.65) | 0)));
-            }
-        }
     }
 
     // -------- Sun/Moon + night tint --------
@@ -1280,7 +1300,7 @@ function drawIsoWorld(deltaTime = 0) {
         const sunX = centerX - Math.cos(dayAngle) * skyPathRadius;
         const sunY = horizonY - Math.sin(dayAngle) * skyPathRadius;
         const moonX = centerX + Math.cos(dayAngle) * skyPathRadius;
-        const moonY = horizonY + Math.sin(dayAngle) * skyPathRadius;
+        const moonY = horizonY - Math.sin(dayAngle) * skyPathRadius;
 
         if (sunY < horizonY + 20) {
             ctx.fillStyle = 'rgba(255, 255, 150, 0.9)';
@@ -1367,7 +1387,7 @@ function updateChunkObjects(chunk, deltaTime, timeInfo, perlin, sliders) {
                 const step = speed * deltaTime;
                 let nx = obj.x + vx * step, ny = obj.y + vy * step;
 
-                if (!isWaterLikeAt(Math.round(nx), Math.round(ny), perlin)) {
+                if (!isWaterLikeAt(Math.round(nx), Math.round(ny), perlin, sliders)) {
                     vx = -vx * 0.4 + nHomeX * 0.8;
                     vy = -vy * 0.4 + nHomeY * 0.8;
                     const m2 = Math.hypot(vx, vy) || 1e-6;
@@ -1393,7 +1413,7 @@ function updateChunkObjects(chunk, deltaTime, timeInfo, perlin, sliders) {
                 const step = speed * deltaTime;
                 let nx = obj.x + vx * step, ny = obj.y + vy * step;
 
-                if (!isWaterLikeAt(Math.round(nx), Math.round(ny), perlin)) {
+                if (!isWaterLikeAt(Math.round(nx), Math.round(ny), perlin, sliders)) {
                     vx = -vx * 0.25;
                     vy = -vy * 0.25;
                     nx = obj.x + vx * step * 0.5;
@@ -1404,7 +1424,7 @@ function updateChunkObjects(chunk, deltaTime, timeInfo, perlin, sliders) {
                 obj.x = nx;
                 obj.y = ny;
             } else if (obj.type === 'npc') {
-                updateNpc(obj, deltaTime, chunk, lightLevel);
+                updateNpc(obj, deltaTime, chunk, lightLevel, perlin, sliders);
             }
         }
     }
@@ -1417,7 +1437,7 @@ function drawWorld(deltaTime = 0) {
     }
     // Early branch to iso mode
     if (renderMode === 'isometric') {
-        return drawIsoWorld(deltaTime);
+        return drawIsoWorld();
     }
     nearbyTradeNpc = null;
 
@@ -1454,7 +1474,7 @@ function drawWorld(deltaTime = 0) {
         wx: Math.floor(mouseWorldX),
         wy: Math.floor(mouseWorldY),
         biomeName: getBiomeAtWorldCoords(mouseWorldX, mouseWorldY, perlin, sliders),
-        isWater: isWaterLikeAt(Math.floor(mouseWorldX), Math.floor(mouseWorldY), perlin),
+        isWater: isWaterLikeAt(Math.floor(mouseWorldX), Math.floor(mouseWorldY), perlin, sliders),
         Htop: getAbsoluteHeight(mouseWorldX, mouseWorldY, perlin, sliders),
         Hraw: getHeightValueAtWorldCoords(mouseWorldX, mouseWorldY, perlin.height, sliders.heightScale, sliders.persistence, sliders.mapScale, sliders.waterLevel)
     };
@@ -1469,23 +1489,18 @@ function drawWorld(deltaTime = 0) {
         ctx.restore();
     }
 
-    // Pass 1: Draw chunks + update objects
-    let builtThisFrame = 0;
+    // Pass 1: Draw chunks
     const drawList = [];
     const allVisibleObjects = [];
 
-    for (let cy = startChunkY; cy < endChunkY; cy++) {
-        for (let cx = startChunkX; cx < endChunkX; cx++) {
+    for (let cy = startChunkY; cy <= endChunkY; cy++) {
+        for (let cx = startChunkX; cx <= endChunkX; cx++) {
             const key = `${cx},${cy}`;
             let chunk = chunkCache.get(key);
             if (!chunk) {
-                if (builtThisFrame < MAX_CHUNKS_PER_FRAME) {
-                    generateChunkData(cx, cy, sliders, sunVector, seed);
-                    builtThisFrame++;
-                    chunk = chunkCache.get(key);
-                } else {
-                    continue;
-                }
+                // Generate chunks on demand, without a per-frame limit
+                generateChunkData(cx, cy, sliders, sunVector, seed);
+                chunk = chunkCache.get(key);
             }
             if (!chunk) continue;
 
@@ -1504,9 +1519,9 @@ function drawWorld(deltaTime = 0) {
 
     // Sort all objects for correct rendering order
     allVisibleObjects.sort((a, b) => {
-        const a_depth = a.x + a.y;
-        const b_depth = b.x + b.y;
-        return a_depth - b_depth;
+        // Correct sorting for top-down view: sort by y, then by x for a stable sort
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
     });
 
     // Pass 2: Draw all sorted objects
@@ -1890,7 +1905,7 @@ function drawDebugSpawnsView() {
 
             if (isIsometric) {
                 const H = getAbsoluteHeight(wx, wy, perlin, sliders, null);
-                const Htop = isWaterLikeAt(wx, wy, perlin) ? SEA_LEVEL_ABS : H;
+                const Htop = H;
                 const p = worldToScreenIso(wx - player.x, wy - player.y, (Htop - SEA_LEVEL_ABS) * iso.elev(), centerX, centerY);
                 const tw = iso.tileW(), th = iso.tileH();
                 fillIsoDiamond(ctx, p.x, p.y, tw, th, ctx.fillStyle);
@@ -1921,10 +1936,8 @@ function drawDebugSpawnsView() {
                 let sx, sy;
 
                 if (isIsometric) {
-                    const H = getAbsoluteHeight(obj.x, obj.y, perlin, sliders, null);
-                    let wz = (H - SEA_LEVEL_ABS) * iso.elev();
-                    if (obj.type === 'tree') wz += pixelScale * 0.6;
-                    const p = worldToScreenIso(obj.x - player.x, obj.y - player.y, wz, centerX, centerY);
+                    const Htop = getAbsoluteHeight(obj.x, obj.y, perlin, sliders, null);
+                    const p = proj(obj.x, obj.y, (Htop - SEA_LEVEL_ABS) * iso.elev());
                     sx = p.x;
                     sy = p.y;
                 } else {
@@ -1960,8 +1973,8 @@ function drawDebugSpawnsView() {
     }
 
     // gather biome counts like the normal view (so legend still makes sense)
-    for (let wy = Math.floor(startTileY); wy < Math.ceil(endTileY); wy++) {
-        for (let wx = Math.floor(startTileX); wx < Math.ceil(endTileX); wx++) {
+    for (let wy = Math.floor(startTileY); wy < Math.ceil(endY); wy++) {
+        for (let wx = Math.floor(startTileX); wx < Math.ceil(endX); wx++) {
             const biome = getBiomeAtWorldCoords(wx, wy, perlin, sliders);
             visibleBiomeCounts[biome] = (visibleBiomeCounts[biome] || 0) + 1;
         }
@@ -2038,16 +2051,16 @@ function updateHUD(currentBiome, visibleTrees = 0, visibleFish = 0, visibleBiome
     DOMElements.biomeText.textContent = currentBiome;
     DOMElements.timeText.textContent = formatTime(timeOfDay);
     DOMElements.treeCountText.textContent = visibleTrees;
-    DOMEElements.fishCountText.textContent = visibleFish;
+    DOMElements.fishCountText.textContent = visibleFish;
 
-    DOMElements.fishLog.innerHTML = '';
+    if (DOMElements.fishLog) DOMElements.fishLog.innerHTML = '';
     const fishEntries = Object.keys(player.fishLog);
     if (fishEntries.length === 0) {
-        DOMElements.fishLog.innerHTML = `<p class="text-gray-500 text-xs italic">No fish discovered</p>`;
+        if (DOMElements.fishLog) DOMElements.fishLog.innerHTML = `<p class="text-gray-500 text-xs italic">No fish discovered</p>`;
     } else {
         for (const fishName of fishEntries) {
             const fishInfo = FISH_TYPES[fishName];
-            DOMElements.fishLog.innerHTML += `<div class="flex justify-between items-center text-sm font-semibold"><span>${fishInfo.emoji} ${fishName.charAt(0).toUpperCase() + fishName.slice(1)}</span><span class="text-green-400">✓</span></div>`;
+            if (DOMElements.fishLog) DOMElements.fishLog.innerHTML += `<div class="flex justify-between items-center text-sm font-semibold"><span>${fishInfo.emoji} ${fishName.charAt(0).toUpperCase() + fishName.slice(1)}</span><span class="text-green-400">✓</span></div>`;
         }
     }
 
@@ -2077,7 +2090,7 @@ function updateHUD(currentBiome, visibleTrees = 0, visibleFish = 0, visibleBiome
     }
 
 
-    DOMElements.keysText.textContent = Object.keys(keys).filter(k => keys[k]).map(k => k.toUpperCase()).join(', ') || '...';
+    if (DOMElements.keysText) DOMElements.keysText.textContent = Object.keys(keys).filter(k => keys[k]).map(k => k.toUpperCase()).join(', ') || '...';
     DOMElements.contourStatus.textContent = isContourOverlayActive ? 'On' : 'Off';
     DOMElements.contourStatus.classList.toggle('text-green-400', isContourOverlayActive);
     DOMElements.contourStatus.classList.toggle('text-red-400', !isContourOverlayActive);
@@ -2127,13 +2140,13 @@ function gameLoop(timestamp) {
             const r = Math.random();
             let next = 'clear';
             let dur = 30000 + Math.random() * 30000; // 30–60s
-            if (season < 0.25) {          // winter bias
+            if (season < 0.25) { // winter bias
                 next = r < 0.40 ? '❄️' : (r < 0.65 ? '☀️' : '🌧️');
-            } else if (season < 0.5) {    // spring
+            } else if (season < 0.5) { // spring
                 next = r < 0.45 ? '🌧️' : '☀️';
-            } else if (season < 0.75) {   // summer
+            } else if (season < 0.75) { // summer
                 next = r < 0.15 ? '🌧️' : '☀️';
-            } else {                      // autumn
+            } else { // autumn
                 next = r < 0.35 ? '🌧️' : '☀️';
             }
             Weather.type = next;
@@ -2165,8 +2178,8 @@ function gameLoop(timestamp) {
     // Invert it so screen motion feels natural in isometric view:
     let moveX, moveY;
     if (renderMode === 'isometric') {
-        moveX = sx + sy;  // Δwx
-        moveY = sy - sx;  // Δwy
+        moveX = sx + sy; // Δwx
+        moveY = sy - sx; // Δwy
         const m = Math.hypot(moveX, moveY) || 1;
         moveX /= m;
         moveY /= m;
@@ -2533,6 +2546,13 @@ window.onload = () => {
     document.addEventListener('keyup', (e) => {
         keys[e.key.toLowerCase()] = false;
     });
+    // Prevent 'stuck key' issues if window loses focus (e.g., alt-tab, devtools)
+    window.addEventListener('blur', () => {
+        keys = {};
+    });
+    window.addEventListener('focus', () => { /* no-op; keys will be rebuilt on next input */
+    });
+
     canvas.addEventListener('click', (e) => {
         const pixelScale = parseInt(sliders.pixelScale.slider.value);
         const rect = canvas.getBoundingClientRect();

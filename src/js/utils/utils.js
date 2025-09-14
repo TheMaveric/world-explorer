@@ -7,7 +7,6 @@ import {
     Weather,
     Wind
 } from "../constants/constants.js";
-import {getSliderValues} from "../scripts.js";
 
 export function seededRandom(seed) {
     let state = Math.sin(seed) * 10000;
@@ -15,10 +14,6 @@ export function seededRandom(seed) {
         state = (state * 9301 + 49297) % 233280;
         return state / 233280;
     };
-}
-
-export function _snap(v) {
-    return (v | 0);
 }
 
 export function lerpColor(c1, c2, t) {
@@ -351,12 +346,6 @@ export function updateWind(dt, windTime, perlin) {
     Wind.speed += (Wind.targetSpeed - Wind.speed) * Math.min(1, ease * dt);
 }
 
-export function isoSizeFromPixelScale(ps) {
-    const tw = Math.max(2, (ps | 0) * 2);         // even width
-    const th = (tw >> 1);                       // enforce 2:1
-    return {tw, th};
-}
-
 export function getHeightGrad(wx, wy, perlin, sliders) {
     // finite difference on your continuous height field
     const hC = getHeightValueAtWorldCoords(wx, wy, perlin.height, sliders.heightScale, sliders.persistence, sliders.mapScale, sliders.waterLevel);
@@ -379,14 +368,14 @@ export function getBiomeIndexFromCache(wx, wy) {
     return chunk.biomeIdx[ly * CHUNK_SIZE + lx];
 }
 
-export function isWaterLikeAt(wx, wy, perlin) {
+export function isWaterLikeAt(wx, wy, perlin, sliders) {
     const idx = getBiomeIndexFromCache(wx, wy);
     if (idx >= 0) return !!BIOME_IS_WATERLIKE[idx];
     // fallback (rare)
-    return isWaterLikeBiomeName(getBiomeAtWorldCoords(wx, wy, perlin, getSliderValues()));
+    return isWaterLikeBiomeName(getBiomeAtWorldCoords(wx, wy, perlin, sliders));
 }
 
-export function updateNpc(npc, dt, chunk, lightLevel) {
+export function updateNpc(npc, dt, chunk, lightLevel, perlin, sliders, timeOfDay) {
     // simple day plan: work → market → home; night = home
     const t = timeOfDay;                // 0..1
     const isNight = lightLevel < 0.30;
@@ -423,7 +412,7 @@ export function updateNpc(npc, dt, chunk, lightLevel) {
     let ny = npc.y + vy * speed * dt;
 
     // keep out of water
-    if (!isWaterLikeAt(Math.round(nx), Math.round(ny))) {
+    if (!isWaterLikeAt(Math.round(nx), Math.round(ny), perlin, sliders)) {
         npc.x = nx;
         npc.y = ny;
     }
@@ -444,4 +433,9 @@ export function manageCache(player) {
     if (farthestKey) {
         chunkCache.delete(farthestKey);
     }
+}
+
+export function getFloatingPlacementRadius(biome, sliders) {
+    if (biome.includes('Water') || /river/i.test(biome)) return Math.max(3, 14 / Math.max(0.2, sliders.fishDensityMultiplier));
+    return 0;
 }

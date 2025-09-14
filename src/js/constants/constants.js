@@ -99,7 +99,7 @@ export const Wind = {
     targetSpeed: 0.25, // eased toward by updateWind()
 };
 
-export const CHUNK_SIZE = 32, MAX_CACHE_SIZE = 250, MAX_CHUNKS_PER_FRAME = 3, chunkCache = new Map(),
+export const CHUNK_SIZE = 32, MAX_CACHE_SIZE = 2500, MAX_CHUNKS_PER_FRAME = 3, chunkCache = new Map(),
     rawNoiseCache = new Map();
 
 export const Weather = {type: '☀️', until: 0}; // ☀️ (clear) | 🌧️ (rain) | ❄️ (snow)
