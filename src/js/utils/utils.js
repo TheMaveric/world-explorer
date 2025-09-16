@@ -1,7 +1,8 @@
 import {
     BIOME_IS_WATERLIKE,
     CHUNK_SIZE,
-    chunkCache, MAX_CACHE_SIZE,
+    chunkCache,
+    MAX_CACHE_SIZE,
     NOISE_OFFSET_X,
     NOISE_OFFSET_Y,
     Weather,
@@ -119,7 +120,7 @@ export function getBiomeFromValues(heightValue, moistureValue, temperatureValue,
     return 'swamp';
 }
 
-export function getBiomeAtWorldCoords(worldX, worldY, perlin, sliders) {
+export function getBiomeAtWorldCoords(worldX, worldY, perlin, sliders, samplers = null) {
     const heightValue = getHeightValueAtWorldCoords(worldX, worldY, perlin.height, sliders.heightScale, sliders.persistence, sliders.mapScale, sliders.waterLevel);
     let moistureValue = getOctaveNoise(worldX, worldY, perlin.moisture, sliders.moistureScale, sliders.persistence, 10, sliders.mapScale);
     let temperatureValue = getOctaveNoise(worldX, worldY, perlin.temperature, 150, sliders.persistence, 10, sliders.mapScale);
@@ -131,12 +132,12 @@ export function getBiomeAtWorldCoords(worldX, worldY, perlin, sliders) {
     const RIVER_MAP_SCALE = 1.0;  // decouple from sliders.mapScale
     // Gentle domain warp so paths meander
     const WARP1_SCALE = 240, WARP2_SCALE = 520, WARP_AMPL = 12;
-    const wu = getOctaveNoise(worldX, worldY, perlin.object, WARP1_SCALE, 0.5, 10, 1.0);
-    const wv = getOctaveNoise(worldX, worldY, perlin.temperature, WARP2_SCALE, 0.5, 10, 1.0);
+    const wu = (samplers && samplers.object) ? samplers.object.sample(worldX, worldY) : getOctaveNoise(worldX, worldY, perlin.object, WARP1_SCALE, 0.5, 10, 1.0);
+    const wv = (samplers && samplers.temperature) ? samplers.temperature.sample(worldX, worldY) : getOctaveNoise(worldX, worldY, perlin.temperature, WARP2_SCALE, 0.5, 10, 1.0);
     const wx = worldX + (wu - 0.5) * WARP_AMPL;
     const wy = worldY + (wv - 0.5) * WARP_AMPL;
     // Long “trunk” field (ridged)
-    const trunkRaw = getOctaveNoise(wx, wy, perlin.river, RIVER_TRUNK_SCALE, sliders.persistence, 10, RIVER_MAP_SCALE);
+    const trunkRaw = (samplers && samplers.riverTrunk) ? samplers.riverTrunk.sample(wx, wy) : getOctaveNoise(wx, wy, perlin.river, RIVER_TRUNK_SCALE, sliders.persistence, 10, RIVER_MAP_SCALE);
     const trunkRidged = 1 - Math.abs(trunkRaw * 2 - 1);
     // Higher-frequency detail (ridged) to spawn tributaries/branches
     const detailRaw = getOctaveNoise(wx, wy, perlin.river, RIVER_DETAIL_SCALE, 0.55, 10, RIVER_MAP_SCALE);
@@ -224,10 +225,10 @@ export function getMovementSpeedModifier(biome) {
     }
 }
 
-export function getPixelLightness(x, y, heightValue, perlinHeight, sliders, sunVector) {
+export function getPixelLightness(x, y, heightValue, perlinHeight, sliders, sunVector, sampler = null) {
     const {heightScale, persistence, mapScale} = sliders;
-    const h_x1 = getHeightValueAtWorldCoords(x + 1, y, perlinHeight, heightScale, persistence, mapScale, sliders.waterLevel);
-    const h_y1 = getHeightValueAtWorldCoords(x, y + 1, perlinHeight, heightScale, persistence, mapScale, sliders.waterLevel);
+    const h_x1 = sampler ? sampler.sample(x + 1, y) : getHeightValueAtWorldCoords(x + 1, y, perlinHeight, heightScale, persistence, mapScale, sliders.waterLevel);
+    const h_y1 = sampler ? sampler.sample(x, y + 1) : getHeightValueAtWorldCoords(x, y + 1, perlinHeight, heightScale, persistence, mapScale, sliders.waterLevel);
     const normalX = ((heightValue - h_x1) * 20) / mapScale;
     const normalY = ((heightValue - h_y1) * 20) / mapScale;
     const dotProduct = normalX * sunVector[0] + normalY * sunVector[1];

@@ -707,14 +707,19 @@ function renderNpc(obj, objScreenX, objScreenY, pixelScale, ctx) {
 // ---------- ISO helpers ----------
 const iso = {
     tileW() {
-        return parseInt(sliders.pixelScale.slider.value) * 2;
-    }, // width
+        const v = (typeof getSliderValues === 'function') ? Number(getSliderValues().pixelScale) : Number(document.getElementById('pixelScaleSlider')?.value || 8);
+        const ps = isFinite(v) && v > 0 ? v : 8;
+        return ps * 2;
+    },
     tileH() {
-        return parseInt(sliders.pixelScale.slider.value);
-    }, // height = width/2
+        const v = (typeof getSliderValues === 'function') ? Number(getSliderValues().pixelScale) : Number(document.getElementById('pixelScaleSlider')?.value || 8);
+        const ps = isFinite(v) && v > 0 ? v : 8;
+        return ps;
+    },
     elev() {
-        const pixelScale = parseInt(sliders.pixelScale.slider.value);
-        return pixelScale * 1.3;
+        const v = (typeof getSliderValues === 'function') ? Number(getSliderValues().pixelScale) : Number(document.getElementById('pixelScaleSlider')?.value || 8);
+        const ps = isFinite(v) && v > 0 ? v : 8;
+        return ps * 1.3;
     }
 };
 
@@ -1214,7 +1219,15 @@ function drawIsoWorld(deltaTime = 0) {
             continue;
         }
 
-        const p = proj(obj.x, obj.y, objWz);
+        let p;
+        if (obj.type === 'tree') {
+            const _pxw = obj.x + (obj.offsetX || 0);
+            const _pyw = obj.y + (obj.offsetY || 0);
+            const _objWz = (getAbsoluteHeight(_pxw, _pyw, perlin, slidersVals, heightCache) - SEA_LEVEL_ABS) * elevScale;
+            p = proj(_pxw, _pyw, _objWz);
+        } else {
+            p = proj(obj.x, obj.y, objWz);
+        }
 
         // Screen-space culling to skip objects outside the camera view
         const _objMarginX = tw; // one tile width

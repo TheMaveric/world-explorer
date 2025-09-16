@@ -293,7 +293,7 @@
             <div class="flex flex-col items-center">
                 <label for="pixelScaleSlider" class="text-sm font-semibold mb-2 text-gray-300">Pixel
                     Scale: <span id="pixelScaleValue">24</span></label>
-                <input type="range" id="pixelScaleSlider" min="1" max="24" value="24"
+                <input type="range" id="pixelScaleSlider" min="1" max="100" value="24"
                        class="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-600">
             </div>
             <div class="flex flex-col items-center">
@@ -380,6 +380,7 @@
     </div>
 
 </div>
+<script src="https://unpkg.com/gpu.js@2.16.0/dist/gpu-browser.min.js"></script>
 <script type="module" src="./src/js/scripts.js"></script>
 </body>
 </html>
